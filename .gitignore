@@ -1,0 +1,24 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+*.py[cod]
+*.log
+*.part
+*.tar.gz
+*.zip
+
+# Benchmark data and generated experiment artifacts are private handoff material.
+data/
+outputs/
+runs/
+delivery/
+configs/rebuttal_original_v6/
+skills/reward_judge_fair_50pct_subset_a/
+skills/reward_judge_fair_50pct_subset_b/
+
+# Paper/review material is intentionally not part of this public repository.
+*.pdf
+review*
+rebuttal_response*

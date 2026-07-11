@@ -1,0 +1,20 @@
+[project]
+name = "skill-rm"
+version = "0.1.0"
+description = "Original Skill-RM v6 code and the minimal EMNLP rebuttal workflow."
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+  "pyyaml",
+  "requests",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["skillrm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp"
