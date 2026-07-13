@@ -27,7 +27,7 @@ def post_completion(
     model: str,
     timeout: float,
     require_tool: bool,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict[str, int] | None]:
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -70,14 +70,30 @@ def post_completion(
                 timeout=timeout,
             )
         response.raise_for_status()
-        message = ((response.json().get("choices") or [{}])[0].get("message") or {})
+        body = response.json()
+        message = ((body.get("choices") or [{}])[0].get("message") or {})
+        usage = normalized_usage(body.get("usage"))
         if require_tool:
             calls = message.get("tool_calls") or []
             name = (((calls[0] if calls else {}).get("function") or {}).get("name"))
-            return name == "final_answer", "tool-call missing" if name != "final_answer" else "ok"
-        return True, "ok"
+            return name == "final_answer", "tool-call missing" if name != "final_answer" else "ok", usage
+        return True, "ok", usage
     except Exception as exc:  # noqa: BLE001
-        return False, type(exc).__name__
+        return False, type(exc).__name__, None
+
+
+def normalized_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        item = value.get(key)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            return None
+        result[key] = item
+    if result["total_tokens"] != result["prompt_tokens"] + result["completion_tokens"]:
+        return None
+    return result
 
 
 def main() -> int:
@@ -87,6 +103,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--chat", action="store_true")
     parser.add_argument("--tools", action="store_true")
+    parser.add_argument("--require-usage", action="store_true")
     parser.add_argument("--redact-urls", action="store_true")
     parser.add_argument("--trust-env", action="store_true")
     args = parser.parse_args()
@@ -111,12 +128,16 @@ def main() -> int:
             failures += 1
             continue
         if args.chat:
-            chat_ok, _ = post_completion(session, base_url, model=args.model, timeout=args.timeout, require_tool=False)
-            print(f"{label}/chat: {'ok' if chat_ok else 'failed <redacted-error>'}")
+            chat_ok, _, chat_usage = post_completion(session, base_url, model=args.model, timeout=args.timeout, require_tool=False)
+            usage_ok = chat_usage is not None
+            chat_ok = chat_ok and (usage_ok or not args.require_usage)
+            print(f"{label}/chat: {'ok' if chat_ok else 'failed <redacted-error>'} usage={'ok' if usage_ok else 'missing'}")
             failures += 0 if chat_ok else 1
         if args.tools:
-            tool_ok, _ = post_completion(session, base_url, model=args.model, timeout=args.timeout, require_tool=True)
-            print(f"{label}/tool-call: {'ok' if tool_ok else 'failed <redacted-error>'}")
+            tool_ok, _, tool_usage = post_completion(session, base_url, model=args.model, timeout=args.timeout, require_tool=True)
+            usage_ok = tool_usage is not None
+            tool_ok = tool_ok and (usage_ok or not args.require_usage)
+            print(f"{label}/tool-call: {'ok' if tool_ok else 'failed <redacted-error>'} usage={'ok' if usage_ok else 'missing'}")
             failures += 0 if tool_ok else 1
     print(f"checked={len(urls)} failures={failures}")
     return 1 if failures else 0

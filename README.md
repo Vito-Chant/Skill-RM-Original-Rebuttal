@@ -8,6 +8,8 @@ The new experiment is a matched comparison of the full fair resource pool and tw
 
 The complete unattended execution instructions are in [docs/codex_rebuttal_experiment_plan.md](docs/codex_rebuttal_experiment_plan.md). A coauthor only needs to provide working Qwen3.5-27B vLLM URLs to a new Codex session and point it at that document.
 
+The later matched compute follow-up, which records exact vLLM usage and returns all Direct Judge/Skill-RM outputs and traces for local analysis, is documented in [docs/codex_compute_followup_plan.md](docs/codex_compute_followup_plan.md). Its ready-to-send coauthor prompt is in [docs/coauthor_compute_prompt.md](docs/coauthor_compute_prompt.md).
+
 ## Local verification
 
 ```bash

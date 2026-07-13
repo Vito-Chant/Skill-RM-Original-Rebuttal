@@ -14,6 +14,7 @@ from typing import Any
 
 from .qwen_baseline import (
     DEFAULT_ENDPOINTS,
+    aggregate_usage_fields,
     build_resource_index,
     call_with_retries,
     compact_tool_calls_for_trace,
@@ -29,6 +30,7 @@ from .qwen_baseline import (
     runtime_skill_tool_guidance,
     runtime_resource_tool_schema,
     runtime_resource_tools_enabled,
+    response_usage_fields,
     skill_package_description,
     skill_package_name,
     tool_call_name,
@@ -418,6 +420,7 @@ def judge_pairwise_baseline(task: OpenRSPairTask, base_url: str, config: dict[st
         tools=tools,
         tool_choice=baseline_tool_choice if tools else None,
     )
+    responses = [response]
     final_tool = first_final_answer_tool_call(response.get("tool_calls") or [])
     parsed = parse_pairwise_final_answer_tool_call(final_tool) if final_tool is not None else parse_pairwise_final(
         response.get("content", ""),
@@ -457,6 +460,7 @@ def judge_pairwise_baseline(task: OpenRSPairTask, base_url: str, config: dict[st
             tools=forced_tools,
             tool_choice=forced_tool_choice,
         )
+        responses.append(forced)
         forced_final_tool = first_final_answer_tool_call(forced.get("tool_calls") or [])
         forced_parsed = (
             parse_pairwise_final_answer_tool_call(forced_final_tool)
@@ -468,7 +472,7 @@ def judge_pairwise_baseline(task: OpenRSPairTask, base_url: str, config: dict[st
             parsed = forced_parsed
     winner = parsed["winner"]
     valid = pairwise_final_valid_for_benchmark(task.benchmark, parsed)
-    return build_pairwise_row(
+    row = build_pairwise_row(
         task,
         base_url,
         config,
@@ -482,6 +486,8 @@ def judge_pairwise_baseline(task: OpenRSPairTask, base_url: str, config: dict[st
         raw_output=response.get("content", ""),
         response=response,
     )
+    row.update(aggregate_usage_fields(responses))
+    return row
 
 
 def judge_pairwise_self_select_skill(
@@ -572,6 +578,7 @@ def judge_pairwise_self_select_skill(
             "request_error": response.get("error"),
             "tool_calls": compact_tool_calls_for_trace(tool_calls),
             "tool_results": [],
+            **response_usage_fields(response),
         }
 
         if response.get("error") and not raw_output and not tool_calls:
@@ -721,6 +728,7 @@ def judge_pairwise_self_select_skill(
                     "tool_calls": compact_tool_calls_for_trace(retry.get("tool_calls") or []),
                     "tool_results": [],
                     "final": retry_parsed,
+                    **response_usage_fields(retry),
                 }
             )
             if pairwise_final_valid_for_benchmark(task.benchmark, retry_parsed):
@@ -740,6 +748,7 @@ def judge_pairwise_self_select_skill(
                 "tool_calls": compact_tool_calls_for_trace(forced_tool_calls),
                 "tool_results": [],
                 "final": final_parsed,
+                **response_usage_fields(forced),
             }
         )
 
@@ -772,6 +781,12 @@ def judge_pairwise_self_select_skill(
                 "tool_calls": [],
                 "tool_results": [],
                 "final": emergency_parsed,
+                "prompt_tokens": emergency_row.get("prompt_tokens"),
+                "completion_tokens": emergency_row.get("completion_tokens"),
+                "total_tokens": emergency_row.get("total_tokens"),
+                "usage_complete": emergency_row.get("usage_complete"),
+                "llm_call_count": emergency_row.get("llm_call_count", 0),
+                "request_attempt_count": emergency_row.get("request_attempt_count", 0),
             }
         )
         if pairwise_final_valid_for_benchmark(task.benchmark, emergency_parsed):
@@ -823,6 +838,8 @@ def judge_pairwise_self_select_skill(
         "emergency_direct_finalization_used": emergency_direct_finalization_used,
         "emergency_direct_finalization_source": emergency_direct_finalization_source,
     }
+    usage = aggregate_usage_fields(trace["steps"])
+    trace["usage"] = usage
     row = build_pairwise_row(
         task,
         base_url,
@@ -862,6 +879,7 @@ def judge_pairwise_self_select_skill(
             "openai_tool_calling": True,
             "trace_id": task.task_id,
             "_trace": trace,
+            **usage,
         }
     )
     if position_swap_audit is not None:
@@ -1248,6 +1266,7 @@ def build_pairwise_row(
         "valid": valid,
         "endpoint": base_url,
         "latency_sec": latency_sec,
+        "end_to_end_latency_sec": latency_sec,
         "enable_thinking": bool(config.get("enable_thinking", False)),
         "thinking_field_sent": response.get("thinking_field_sent"),
         "reasoning_len": int(response.get("reasoning_len") or 0),

@@ -477,6 +477,7 @@ def judge_agentic_skill_official_ranking(
             "finish_reason": response.get("finish_reason"),
             "latency_sec": response.get("latency_sec"),
             "reasoning_len": response.get("reasoning_len", 0),
+            **response_usage_fields(response),
         }
 
         final_parsed = parse_agentic_final(raw_output)
@@ -516,6 +517,9 @@ def judge_agentic_skill_official_ranking(
         "resources_viewed": resources_unique,
         "tool_error_count": tool_error_count,
     }
+    usage = aggregate_usage_fields(trace["steps"])
+    trace["usage"] = usage
+    end_to_end_latency = time.time() - started_at
     row = {
         "sample_id": str(record["id"]),
         "subset_for_metrics_only": record.get("subset"),
@@ -539,7 +543,9 @@ def judge_agentic_skill_official_ranking(
         "tool_error_count": tool_error_count,
         "agent_step_count": len(trace["steps"]),
         "trace_id": str(record["id"]),
-        "latency_sec": time.time() - started_at,
+        "latency_sec": end_to_end_latency,
+        "end_to_end_latency_sec": end_to_end_latency,
+        **usage,
         "enable_thinking": bool(config.get("enable_thinking", False)),
         "thinking_field_sent": final_response.get("thinking_field_sent"),
         "reasoning_len": sum(int(item.get("reasoning_len") or 0) for item in trace["steps"]),
@@ -616,6 +622,7 @@ def judge_self_select_skill_official_ranking(
             "request_error": response.get("error"),
             "tool_calls": compact_tool_calls_for_trace(tool_calls),
             "tool_results": [],
+            **response_usage_fields(response),
         }
 
         if response.get("error") and not raw_output and not tool_calls:
@@ -711,6 +718,7 @@ def judge_self_select_skill_official_ranking(
             "tool_calls": [],
             "tool_results": [],
             "final": forced_parsed,
+            **response_usage_fields(forced_response),
         }
         trace["steps"].append(forced_trace)
         raw_output = forced_raw
@@ -737,6 +745,9 @@ def judge_self_select_skill_official_ranking(
         "wiki_search_call_count": wiki_search_call_count,
         "wiki_search_result_count": wiki_search_result_count,
     }
+    usage = aggregate_usage_fields(trace["steps"])
+    trace["usage"] = usage
+    end_to_end_latency = time.time() - started_at
     row = {
         "sample_id": str(record["id"]),
         "subset_for_metrics_only": record.get("subset"),
@@ -770,7 +781,9 @@ def judge_self_select_skill_official_ranking(
         "agent_step_count": len(trace["steps"]),
         "openai_tool_calling": True,
         "trace_id": str(record["id"]),
-        "latency_sec": time.time() - started_at,
+        "latency_sec": end_to_end_latency,
+        "end_to_end_latency_sec": end_to_end_latency,
+        **usage,
         "enable_thinking": bool(config.get("enable_thinking", False)),
         "thinking_field_sent": final_response.get("thinking_field_sent"),
         "reasoning_len": sum(int(item.get("reasoning_len") or 0) for item in trace["steps"]),
@@ -799,6 +812,7 @@ def judge_official_ratings(
     latencies = []
     reasoning_lens = []
     finish_reasons = []
+    responses: list[dict[str, Any]] = []
     for answer in answers:
         messages = [
             {
@@ -807,6 +821,7 @@ def judge_official_ratings(
             }
         ]
         response = call_with_retries(base_url, messages, config)
+        responses.append(response)
         raw_output = response["content"]
         ratings.append(parse_official_rating(raw_output))
         judgments.append(raw_output)
@@ -825,6 +840,7 @@ def judge_official_ratings(
         else:
             score = 0.25
 
+    usage = aggregate_usage_fields(responses)
     row = {
         "sample_id": str(record["id"]),
         "subset_for_metrics_only": record.get("subset"),
@@ -837,6 +853,8 @@ def judge_official_ratings(
         "valid": all(rating != -1 for rating in ratings),
         "endpoint": base_url,
         "latency_sec": sum(latencies),
+        "end_to_end_latency_sec": sum(latencies),
+        **usage,
         "enable_thinking": bool(config.get("enable_thinking", False)),
         "reasoning_len": sum(reasoning_lens),
         "finish_reasons": finish_reasons,
@@ -857,7 +875,9 @@ def call_with_retries(
     started_at = time.time()
     response_meta: dict[str, Any] = {}
     error = None
+    attempts = 0
     for attempt in range(1, int(config.get("retries", 2)) + 2):
+        attempts = attempt
         try:
             response_meta = call_chat_completion(base_url, messages, config, tools=tools, tool_choice=tool_choice)
             break
@@ -876,18 +896,67 @@ def call_with_retries(
         "finish_reason": response_meta.get("finish_reason"),
         "tool_calls": response_meta.get("tool_calls") or [],
         "error": error,
+        "request_attempt_count": attempts,
+        "llm_call_count": 1 if response_meta else 0,
+        **normalized_usage_fields(response_meta.get("usage"), call_succeeded=bool(response_meta)),
     }
     return output
+
+
+def normalized_usage_fields(value: Any, *, call_succeeded: bool) -> dict[str, Any]:
+    usage = value if isinstance(value, dict) else {}
+    fields: dict[str, int | None] = {}
+    complete = call_succeeded
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        raw = usage.get(key)
+        valid = isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0
+        fields[key] = int(raw) if valid else None
+        complete = complete and valid
+    if complete and fields["total_tokens"] != fields["prompt_tokens"] + fields["completion_tokens"]:
+        complete = False
+    return {**fields, "usage_complete": bool(complete)}
+
+
+def response_usage_fields(response: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "prompt_tokens": response.get("prompt_tokens"),
+        "completion_tokens": response.get("completion_tokens"),
+        "total_tokens": response.get("total_tokens"),
+        "usage_complete": bool(response.get("usage_complete")),
+        "llm_call_count": int(response.get("llm_call_count") or 0),
+        "request_attempt_count": int(response.get("request_attempt_count") or 0),
+    }
+
+
+def aggregate_usage_fields(items: list[dict[str, Any]]) -> dict[str, Any]:
+    calls = sum(int(item.get("llm_call_count") or 0) for item in items)
+    attempts = sum(int(item.get("request_attempt_count") or 0) for item in items)
+    complete = all(bool(item.get("usage_complete")) for item in items if int(item.get("llm_call_count") or 0) > 0)
+    complete = complete and calls > 0
+    totals: dict[str, int | None] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        values = [item.get(key) for item in items if int(item.get("llm_call_count") or 0) > 0]
+        totals[key] = sum(int(value) for value in values) if complete and all(isinstance(value, int) for value in values) else None
+    model_wait = sum(float(item.get("latency_sec") or 0.0) for item in items)
+    return {
+        **totals,
+        "usage_complete": complete,
+        "llm_call_count": calls,
+        "request_attempt_count": attempts,
+        "model_wait_sec": model_wait,
+    }
 
 
 def response_output_fields(response: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     row = {
         "latency_sec": response["latency_sec"],
+        "end_to_end_latency_sec": response["latency_sec"],
         "enable_thinking": bool(config.get("enable_thinking", False)),
         "thinking_field_sent": response.get("thinking_field_sent"),
         "reasoning_len": response.get("reasoning_len", 0),
         "finish_reason": response.get("finish_reason"),
         "raw_output": response.get("content", ""),
+        **aggregate_usage_fields([response]),
     }
     if response.get("reasoning") and bool(config.get("save_reasoning", config.get("enable_thinking", False))):
         row["reasoning"] = response["reasoning"]
@@ -3867,6 +3936,7 @@ def call_chat_completion(
         "tool_calls": message.get("tool_calls") or [],
         "finish_reason": choice.get("finish_reason"),
         "thinking_field_sent": include_thinking_field,
+        "usage": data.get("usage"),
     }
 
 
