@@ -21,6 +21,7 @@ ERROR_TYPES = {
     "unsupported_claim",
     "tool_failure",
     "reasoning_gap",
+    "final_mapping",
     "insufficient_trace",
     "other",
 }
@@ -147,17 +148,23 @@ def main() -> None:
     consensus = read_form(consensus_path, ids)
     keys = {str(row["audit_id"]): row for row in iter_jsonl(key_path)}
     dimension_counts: dict[str, Counter[str]] = {dimension: Counter() for dimension in DIMENSIONS}
+    by_setting: defaultdict[str, dict[str, Counter[str]]] = defaultdict(
+        lambda: {dimension: Counter() for dimension in DIMENSIONS}
+    )
     by_outcome: defaultdict[str, Counter[str]] = defaultdict(Counter)
     error_types: Counter[str] = Counter()
     representative: list[dict[str, Any]] = []
     for audit_id in ids:
         row = consensus[audit_id]
         key = keys[audit_id]
+        setting = str(key.get("setting") or "standard")
+        outcome = str(key.get("outcome_group") or key.get("outcome") or "unknown")
         for dimension in DIMENSIONS:
             dimension_counts[dimension][row[dimension]] += 1
+            by_setting[setting][dimension][row[dimension]] += 1
         error_types[row["error_type"]] += 1
-        by_outcome[str(key["outcome_group"])][row["error_type"]] += 1
-        if key["outcome_group"] == "improved" and row["error_type"] == "none" and all(
+        by_outcome[outcome][row["error_type"]] += 1
+        if outcome in {"improved", "corrected"} and row["error_type"] == "none" and all(
             row[dimension] == "Yes" for dimension in DIMENSIONS
         ):
             representative.append(
@@ -182,6 +189,10 @@ def main() -> None:
         },
         "agreement": agreement_summary,
         "consensus_dimension_counts": {key: dict(value) for key, value in dimension_counts.items()},
+        "consensus_dimension_counts_by_setting": {
+            setting: {dimension: dict(counts) for dimension, counts in values.items()}
+            for setting, values in by_setting.items()
+        },
         "consensus_error_types": dict(error_types),
         "error_types_by_outcome": {key: dict(value) for key, value in by_outcome.items()},
         "representative_improved_candidates": representative,
@@ -191,7 +202,7 @@ def main() -> None:
     lines = [
         "# Two-Author Human Trace Evaluation",
         "",
-        "This is a behavior-enriched, outcome-blinded two-author evaluation of 30 traces, not a population estimate.",
+        "This is a behavior-enriched, outcome-blinded two-author evaluation of 30 traces, not a population estimate. Standard-input and resource-enhanced results are reported separately.",
         "",
         "| Dimension | Yes | Yes+Partial | Raw agreement | Weighted kappa |",
         "| --- | ---: | ---: | ---: | ---: |",
@@ -203,6 +214,13 @@ def main() -> None:
             f"| {dimension} | {counts['Yes']}/{len(ids)} | {counts['Yes'] + counts['Partial']}/{len(ids)} | "
             f"{fmt(item['raw_agreement'])} | {fmt(item['ordinal_weighted_kappa'])} |"
         )
+    for setting in ("standard", "resource_enhanced"):
+        setting_counts = by_setting.get(setting, {})
+        n_setting = sum((setting_counts.get(DIMENSIONS[0]) or {}).values())
+        lines.extend(["", f"## {setting}", "", "| Dimension | Yes | Yes+Partial |", "| --- | ---: | ---: |"])
+        for dimension in DIMENSIONS:
+            counts = setting_counts.get(dimension, Counter())
+            lines.append(f"| {dimension} | {counts['Yes']}/{n_setting} | {counts['Yes'] + counts['Partial']}/{n_setting} |")
     lines.extend(["", "Error types: " + ", ".join(f"{key}={value}" for key, value in sorted(error_types.items())), ""])
     (audit_dir / "human_audit_summary.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print("\n".join(lines))
