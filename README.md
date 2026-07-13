@@ -10,8 +10,6 @@ The complete unattended execution instructions are in [docs/codex_rebuttal_exper
 
 The later matched compute follow-up, which records exact vLLM usage and returns all Direct Judge/Skill-RM outputs and traces for local analysis, is documented in [docs/codex_compute_followup_plan.md](docs/codex_compute_followup_plan.md). Its ready-to-send coauthor prompt is in [docs/coauthor_compute_prompt.md](docs/coauthor_compute_prompt.md).
 
-Historical standard-input and resource-enhanced traces can be analyzed locally with `scripts/analyze_historical_joint_traces.py`. It produces separated full-trace statistics and a 30-case, outcome-blinded two-author annotation package without sending historical traces to a model endpoint.
-
 ## Local verification
 
 ```bash
